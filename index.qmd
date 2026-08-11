@@ -1,0 +1,149 @@
+---
+title: "Reflection on Ensembles: Bagging and Boosting"
+subtitle: "Understanding the Algorithms"
+author: "Gigi Brunel"
+date: today
+
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-expand: 1
+    toc-location: right-body
+    toc-title: "Contents"
+    number-sections: true
+
+    code-fold: true
+    code-summary: "Show R Code"
+    code-tools: true
+
+    theme: cosmo
+    highlight-style: github
+    df-print: paged
+    embed-resources: true
+
+execute:
+  echo: false
+  warning: false
+  message: false
+  freeze: true
+---
+
+# Random Forests
+
+## Building, Using, and Evaluating
+
+Random forests are better than decision trees because individual decision trees work well with the data used to create them but are not always flexible enough to accurately classify new samples. Random forests combine many decision trees together, making the model more accurate and more flexible.
+
+## Key Terminology
+
+- **Bootstrap Dataset:** A dataset created by randomly sampling observations from the original dataset with replacement. The same sample can be selected more than once.
+- **Bagging:** Bootstrapping the data and combining the predictions from many decision trees.
+- **Out-of-Bag Dataset:** 1/3 of the original observations are not included in a bootstrap sample.
+- **Out-of-Bag Error:** The proportion of out-of-bag observations that are classified incorrectly. This is used to estimate how accurate the random forest is.
+
+## Key Takeaways
+
+- Random forests build hundreds of decision trees instead of relying on a single tree.
+- Each tree is trained using a bootstrap dataset and a random subset of variables.
+- Final predictions are made by combining the results from all trees.
+- Out-of-bag error provides a way to estimate model accuracy without using a separate test dataset.
+- Different numbers of variables can be tested to determine which model performs best.
+
+## Missing Data and Clustering
+
+Random forests can estimate missing values by making an initial guess and then improving those guesses using similarities between observations. The similarities are stored in a proximity matrix and updated several times until the missing values stabilize.
+
+## Key Terminology
+
+- **Proximity Matrix:** Measures how similar observations are based on how often they end up in the same leaf node.
+- **Distance Matrix:** Created from proximity values that can be used to visualize relationships between observations.
+- **Heat Map:** A graphical display that uses colors to show the similarities between observations.
+- **MDS Plot:** A visualization that shows the similarities between observations.
+
+## Key Takeaways
+
+- Missing values are first estimated using the median for numeric variables.
+- Similar observations are identified using the proximity matrix.
+- The proximity values are used to improve the estimates of missing values.
+- The process is repeated several times until the values converge.
+- Random forests can also classify new observations with missing values by creating different possible versions of the observation and selecting the prediction that fits the forest best.
+
+# AdaBoost
+
+AdaBoost builds many small decision trees called stumps. Each stump contributes differently to the final prediction depending on how well it classifies the data. The mistakes made by one stump influence the next stump, allowing the model to focus on observations that were previously classified incorrectly.
+
+## Key Terminology
+
+- **AdaBoost:** Uses many weak stumps to create a stronger model.
+- **Decision Stump:** A decision tree with only one node, and two leaves.
+- **Weak Learner:** A simple model that performs only slightly better than random guessing.
+- **Gini Index:** A measure used to determine how well a stump separates the data.
+
+## Key Takeaways
+
+- AdaBoost uses many decision stumps instead of large decision trees.
+- Better-performing stumps have more influence on the final prediction.
+- Each new stump focuses on correcting the mistakes made by previous stumps.
+- Combining many weak learners creates a stronger classifier.
+
+# Gradient Boosting
+
+Gradient Boosting predicts continuous values and builds models from them. The first prediction is the average value, and each new tree is built to reduce the errors made by the previous trees.
+
+## Key Terminology
+
+- **Gradient Boosting:** Improves predictions by correcting previous errors one tree at a time.
+- **Loss Function:** A function that measures prediction error.
+- **Pseudo-Residuals:** The difference between the observed outcome and the current prediction.
+- **Learning Rate:** Controls how much each new tree contributes to the model.
+- **Chain Rule:** A calculus rule used when calculating gradients.
+
+## Key Takeaways
+
+- Gradient Boosting begins with a simple prediction based on the average value.
+
+- Each new tree is created using the errors from the previous tree.
+
+- Trees are small, with a few leaf nodes.
+
+- A differentiable loss function is required.
+
+- The derivative and chain rule are used to minimize prediction error.
+
+- Pseudo-residuals measure the errors that each new tree attempts to correct.
+
+# XGBoost
+
+XGBoost is an advanced version of Gradient Boosting that builds decision trees one after another to improve predictions. For regression, the model begins by predicting the average value and then builds trees that correct the remaining errors. For classification, the model starts by predicting an initial probability and repeatedly updates those predictions using log odds, residuals, and small decision trees.
+
+## Key Terminology
+
+- **Residuals:** The errors between the observed values and the model's predictions.
+- **Learning Rate:** Controls how much each new tree contributes to the model.
+- **Similarity Score:** A value used to determine the best way to split the data when building a tree.
+- **Cover:** A measurement used to determine whether a node contains enough information to continue splitting.
+- **Gamma:** A pruning parameter that helps prevent unnecessary tree growth.
+- **Lambda:** A regularization parameter that helps reduce overfitting.
+- **Hessian:** The second derivative of the loss function.
+- **Second order Taylor Approximation:** A mathematical technique used to simplify optimization.
+- **Approximate Greedy Algorithm:** Uses quantiles instead of every possible split to improve efficiency.
+- **Sparsity Aware Split Finding:** Learns the best default direction for missing values.
+- **Out-of-Core Computation:** Allows XGBoost to process datasets that are larger than available memory.
+
+## Key Takeaways
+
+- It builds trees one at a time, with each tree correcting the mistakes from the previous trees.
+- Regression begins by predicting the average value, while classification begins with an initial probability.
+- Similarity scores, cover, gamma, and lambda help determine how trees are built and pruned.
+- Uses several advanced optimizations, including approximate greedy search, weighted quantile sketches, cache-aware access, and sparsity-aware split finding, to efficiently handle very large datasets.
+
+# Appendix
+
+## GitHub Repository
+
+<https://github.com/gigibrunel/W10-0---Preview-Ensemble-Topics-Before-Class.git>
+
+## GitHub Pages
+
+<https://gigibrunel.github.io/W10-0---Preview-Ensemble-Topics-Before-Class/>
