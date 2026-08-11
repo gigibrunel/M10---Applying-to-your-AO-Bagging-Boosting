@@ -1,149 +1,1191 @@
 ---
-title: "Reflection on Ensembles: Bagging and Boosting"
-subtitle: "Understanding the Algorithms"
+title: "Reflection on Ensembles, Model Comparisons, and Interpretations with Group Project Data"
+subtitle: "Analytics Objective: Predicting High-Spending H&M Customers"
 author: "Gigi Brunel"
 date: today
 
 format:
   html:
     toc: true
-    toc-depth: 3
+    toc-depth: 4
     toc-expand: 1
     toc-location: right-body
     toc-title: "Contents"
     number-sections: true
-
     code-fold: true
     code-summary: "Show R Code"
     code-tools: true
-
+    code-overflow: wrap
     theme: cosmo
     highlight-style: github
     df-print: paged
     embed-resources: true
 
 execute:
-  echo: false
+  echo: true
   warning: false
   message: false
   freeze: true
 ---
 
-# Random Forests
+```{r}
+#| label: setup
+#| echo: false
 
-## Building, Using, and Evaluating
+library(tidymodels)
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(scales)
+library(knitr)
+library(glmnet)
+library(xgboost)
 
-Random forests are better than decision trees because individual decision trees work well with the data used to create them but are not always flexible enough to accurately classify new samples. Random forests combine many decision trees together, making the model more accurate and more flexible.
+tidymodels_prefer()
 
-## Key Terminology
+set.seed(6540)
+```
 
-- **Bootstrap Dataset:** A dataset created by randomly sampling observations from the original dataset with replacement. The same sample can be selected more than once.
-- **Bagging:** Bootstrapping the data and combining the predictions from many decision trees.
-- **Out-of-Bag Dataset:** 1/3 of the original observations are not included in a bootstrap sample.
-- **Out-of-Bag Error:** The proportion of out-of-bag observations that are classified incorrectly. This is used to estimate how accurate the random forest is.
+For our group project, my research objective is to determine whether customers with different Fashion News subscription statuses show different purchasing behavior. Since this assignment focuses on machine learning, I expanded that objective into a classification problem that predicts whether a customer is likely to become a high-spending customer.
 
-## Key Takeaways
+This is a supervised classification problem. The outcome variable is whether a customer becomes a high spender, while the predictors include Fashion News subscription status, age, club membership status, and previous purchasing behavior.
 
-- Random forests build hundreds of decision trees instead of relying on a single tree.
-- Each tree is trained using a bootstrap dataset and a random subset of variables.
-- Final predictions are made by combining the results from all trees.
-- Out-of-bag error provides a way to estimate model accuracy without using a separate test dataset.
-- Different numbers of variables can be tested to determine which model performs best.
+### Type of Machine Learning
 
-## Missing Data and Clustering
+This is a supervised-learning problem because the model is trained using customers whose future spending category is already known.
 
-Random forests can estimate missing values by making an initial guess and then improving those guesses using similarities between observations. The similarities are stored in a proximity matrix and updated several times until the missing values stabilize.
+It is a classification problem because the outcome has two categories:
 
-## Key Terminology
+1.  `High Spender`
+2.  `Not High Spender`
 
-- **Proximity Matrix:** Measures how similar observations are based on how often they end up in the same leaf node.
-- **Distance Matrix:** Created from proximity values that can be used to visualize relationships between observations.
-- **Heat Map:** A graphical display that uses colors to show the similarities between observations.
-- **MDS Plot:** A visualization that shows the similarities between observations.
+### Outcome and Features
 
-## Key Takeaways
+The outcome variable is `high_spender`, which shows whether a customer’s future spending is above the median future spending of customers represented in the modeling data.
 
-- Missing values are first estimated using the median for numeric variables.
-- Similar observations are identified using the proximity matrix.
-- The proximity values are used to improve the estimates of missing values.
-- The process is repeated several times until the values converge.
-- Random forests can also classify new observations with missing values by creating different possible versions of the observation and selecting the prediction that fits the forest best.
+The proposed features are:
 
-# AdaBoost
+- Fashion News subscription status
+- Age
+- H&M Club membership status
+- Number of prior transactions
+- Prior total spending
+- Average prior purchase price
+- Number of unique products previously purchased
+- Preferred sales channel
+- Days since the customer’s most recent prior purchase
 
-AdaBoost builds many small decision trees called stumps. Each stump contributes differently to the final prediction depending on how well it classifies the data. The mistakes made by one stump influence the next stump, allowing the model to focus on observations that were previously classified incorrectly.
+# Data Preparation
 
-## Key Terminology
+This analysis uses three files from the H&M Personalized Fashion Recommendations dataset. The customer file has demographic information, the article file has product information, and the transaction file has purchase history. To make the analysis more manageable, I used the one-million-transaction sample created in my previous assignment.
 
-- **AdaBoost:** Uses many weak stumps to create a stronger model.
-- **Decision Stump:** A decision tree with only one node, and two leaves.
-- **Weak Learner:** A simple model that performs only slightly better than random guessing.
-- **Gini Index:** A measure used to determine how well a stump separates the data.
+```{r}
+#| label: import-data
 
-## Key Takeaways
+customers <- read_csv(
+  "customers.csv",
+  show_col_types = FALSE
+)
 
-- AdaBoost uses many decision stumps instead of large decision trees.
-- Better-performing stumps have more influence on the final prediction.
-- Each new stump focuses on correcting the mistakes made by previous stumps.
-- Combining many weak learners creates a stronger classifier.
+articles <- read_csv(
+  "articles.csv",
+  show_col_types = FALSE
+)
 
-# Gradient Boosting
+transactions <- read_csv(
+  "transactions_sample.csv",
+  show_col_types = FALSE
+) |>
+  mutate(t_dat = as.Date(t_dat))
+```
 
-Gradient Boosting predicts continuous values and builds models from them. The first prediction is the average value, and each new tree is built to reduce the errors made by the previous trees.
+```{r}
+#| label: divide-time-periods
 
-## Key Terminology
 
-- **Gradient Boosting:** Improves predictions by correcting previous errors one tree at a time.
-- **Loss Function:** A function that measures prediction error.
-- **Pseudo-Residuals:** The difference between the observed outcome and the current prediction.
-- **Learning Rate:** Controls how much each new tree contributes to the model.
-- **Chain Rule:** A calculus rule used when calculating gradients.
+feature_end_date <- as.Date("2020-06-30")
+outcome_start_date <- as.Date("2020-07-01")
 
-## Key Takeaways
+feature_transactions <- transactions |>
+  filter(t_dat <= feature_end_date)
 
-- Gradient Boosting begins with a simple prediction based on the average value.
+outcome_transactions <- transactions |>
+  filter(t_dat >= outcome_start_date)
+```
 
-- Each new tree is created using the errors from the previous tree.
+## Customer-Level Feature Table
 
-- Trees are small, with a few leaf nodes.
+```{r}
+#| label: create-features
 
-- A differentiable loss function is required.
+customer_features <- feature_transactions |>
+  group_by(customer_id) |>
+  summarise(
+    prior_transactions = n(),
+    prior_total_spend = sum(price, na.rm = TRUE),
+    prior_average_price = mean(price, na.rm = TRUE),
+    unique_products = n_distinct(article_id),
+    online_share = mean(sales_channel_id == 1, na.rm = TRUE),
+    most_recent_prior_purchase = max(t_dat, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    days_since_prior_purchase = as.numeric(
+      feature_end_date - most_recent_prior_purchase
+    )
+  )
+```
 
-- The derivative and chain rule are used to minimize prediction error.
+## Future-Spending Outcome
 
-- Pseudo-residuals measure the errors that each new tree attempts to correct.
+```{r}
+#| label: create-outcome
 
-# XGBoost
+future_spending <- outcome_transactions |>
+  group_by(customer_id) |>
+  summarise(
+    future_total_spend = sum(price, na.rm = TRUE),
+    future_transactions = n(),
+    .groups = "drop"
+  )
+```
 
-XGBoost is an advanced version of Gradient Boosting that builds decision trees one after another to improve predictions. For regression, the model begins by predicting the average value and then builds trees that correct the remaining errors. For classification, the model starts by predicting an initial probability and repeatedly updates those predictions using log odds, residuals, and small decision trees.
+## Final Modeling Dataset
 
-## Key Terminology
+```{r}
+#| label: modeling-data
 
-- **Residuals:** The errors between the observed values and the model's predictions.
-- **Learning Rate:** Controls how much each new tree contributes to the model.
-- **Similarity Score:** A value used to determine the best way to split the data when building a tree.
-- **Cover:** A measurement used to determine whether a node contains enough information to continue splitting.
-- **Gamma:** A pruning parameter that helps prevent unnecessary tree growth.
-- **Lambda:** A regularization parameter that helps reduce overfitting.
-- **Hessian:** The second derivative of the loss function.
-- **Second order Taylor Approximation:** A mathematical technique used to simplify optimization.
-- **Approximate Greedy Algorithm:** Uses quantiles instead of every possible split to improve efficiency.
-- **Sparsity Aware Split Finding:** Learns the best default direction for missing values.
-- **Out-of-Core Computation:** Allows XGBoost to process datasets that are larger than available memory.
+modeling_data <- customer_features |>
+  inner_join(
+    future_spending,
+    by = "customer_id"
+  ) |>
+  left_join(
+    customers |>
+      select(
+        customer_id,
+        age,
+        club_member_status,
+        fashion_news_frequency
+      ),
+    by = "customer_id"
+  ) |>
+  mutate(
+    club_member_status = replace_na(
+      club_member_status,
+      "Unknown"
+    ),
+    fashion_news_frequency = case_when(
+      fashion_news_frequency %in% c("NONE", "None") ~ "None",
+      fashion_news_frequency == "Regularly" ~ "Regularly",
+      fashion_news_frequency == "Monthly" ~ "Monthly",
+      TRUE ~ "Unknown"
+    )
+  )
 
-## Key Takeaways
+high_spend_cutoff <- median(
+  modeling_data$future_total_spend,
+  na.rm = TRUE
+)
 
-- It builds trees one at a time, with each tree correcting the mistakes from the previous trees.
-- Regression begins by predicting the average value, while classification begins with an initial probability.
-- Similarity scores, cover, gamma, and lambda help determine how trees are built and pruned.
-- Uses several advanced optimizations, including approximate greedy search, weighted quantile sketches, cache-aware access, and sparsity-aware split finding, to efficiently handle very large datasets.
+modeling_data <- modeling_data |>
+  mutate(
+    high_spender = if_else(
+      future_total_spend > high_spend_cutoff,
+      "High Spender",
+      "Not High Spender"
+    ),
+    high_spender = factor(
+      high_spender,
+      levels = c("High Spender", "Not High Spender")
+    ),
+    club_member_status = factor(club_member_status),
+    fashion_news_frequency = factor(fashion_news_frequency)
+  ) |>
+  select(
+    customer_id,
+    high_spender,
+    age,
+    club_member_status,
+    fashion_news_frequency,
+    prior_transactions,
+    prior_total_spend,
+    prior_average_price,
+    unique_products,
+    online_share,
+    days_since_prior_purchase
+  ) |>
+  drop_na(high_spender)
+```
+
+## Data Verification
+
+```{r}
+#| label: verify-modeling-data
+
+verification_table <- tibble(
+  Measure = c(
+    "Customers in Modeling Data",
+    "Feature Period Transactions",
+    "Outcome Period Transactions",
+    "High-Spending Cutoff"
+  ),
+  Value = c(
+    comma(nrow(modeling_data)),
+    comma(nrow(feature_transactions)),
+    comma(nrow(outcome_transactions)),
+    dollar(high_spend_cutoff)
+  )
+)
+
+kable(
+  verification_table,
+  caption = "Verification of the Customer-Level Modeling Dataset"
+)
+```
+
+```{r}
+#| label: outcome-distribution
+
+modeling_data |>
+  count(high_spender) |>
+  mutate(
+    percentage = percent(n / sum(n), accuracy = 0.1)
+  ) |>
+  kable(
+    caption = "Distribution of the Classification Outcome"
+  )
+```
+
+# Model Setup
+
+## Training and Test Split
+
+```{r}
+#| label: model-split
+
+set.seed(6540)
+
+customer_split <- initial_split(
+  modeling_data,
+  prop = 0.80,
+  strata = high_spender
+)
+
+customer_train <- training(customer_split)
+customer_test <- testing(customer_split)
+```
+
+The data was split into 80% training data and 20% test data. Stratification was used so that the proportion of high spenders and non-high spenders stayed similar in both datasets.
+
+## Classification Recipe
+
+```{r}
+#| label: model-recipe
+
+customer_recipe <- recipe(
+  high_spender ~
+    customer_id +
+    age +
+    club_member_status +
+    fashion_news_frequency +
+    prior_transactions +
+    prior_total_spend +
+    prior_average_price +
+    unique_products +
+    online_share +
+    days_since_prior_purchase,
+  data = customer_train
+) |>
+  update_role(
+    customer_id,
+    new_role = "ID"
+  ) |>
+  step_impute_median(
+    all_numeric_predictors()
+  ) |>
+  step_dummy(
+    all_nominal_predictors()
+  ) |>
+  step_zv(
+    all_predictors()
+  )
+```
+
+The same recipe will be used across the models so that they are compared using the same predictors and preprocessing steps.
+
+## 10-Fold Cross-Validation
+
+```{r}
+#| label: cv-folds
+
+set.seed(6540)
+
+customer_folds <- vfold_cv(
+  customer_train,
+  v = 10,
+  strata = high_spender
+)
+```
+
+The same 10 cross-validation folds will be used to compare the models using ROC AUC.
+
+# Model 1: Lasso Logistic Regression
+
+## Model Specification
+
+Lasso Logistic Regression is a useful starting model because the outcome has two categories. The Lasso penalty can also shrink less useful predictors toward zero, which helps simplify the model and reduce overfitting.
+
+```{r}
+#| label: lasso-spec
+
+lasso_spec <- logistic_reg(
+  penalty = tune(),
+  mixture = 1
+) |>
+  set_engine("glmnet") |>
+  set_mode("classification")
+```
+
+## Workflow
+
+```{r}
+#| label: lasso-workflow
+
+lasso_workflow <- workflow() |>
+  add_recipe(customer_recipe) |>
+  add_model(lasso_spec)
+```
+
+## Tune the Lasso Penalty
+
+```{r}
+#| label: lasso-tuning
+
+set.seed(6540)
+
+lasso_grid <- grid_regular(
+  penalty(
+    range = c(-4, 0),
+    trans = transform_log10()
+  ),
+  levels = 20
+)
+
+lasso_tune <- tune_grid(
+  lasso_workflow,
+  resamples = customer_folds,
+  grid = lasso_grid,
+  metrics = metric_set(
+    roc_auc,
+    accuracy
+  )
+)
+```
+
+## Tuning Results
+
+```{r}
+#| label: fig-lasso-tuning
+#| fig-cap: "Cross-validated performance across Lasso penalty values."
+
+autoplot(lasso_tune)
+```
+
+## Best Penalty
+
+```{r}
+#| label: lasso-best
+
+best_lasso <- select_best(
+  lasso_tune,
+  metric = "roc_auc"
+)
+
+best_lasso |>
+  knitr::kable(
+    caption = "Best Lasso Penalty Based on ROC AUC"
+  )
+```
+
+The best penalty was selected using cross-validated ROC AUC because the final assignment compares all four models using this metric.
+
+## Final Lasso Model
+
+```{r}
+#| label: lasso-final-fit
+
+final_lasso_workflow <- lasso_workflow |>
+  finalize_workflow(best_lasso)
+
+final_lasso_fit <- fit(
+  final_lasso_workflow,
+  data = customer_train
+)
+```
+
+## Test-Set Evaluation
+
+```{r}
+#| label: lasso-test
+
+lasso_predictions <- augment(
+  final_lasso_fit,
+  new_data = customer_test
+)
+
+lasso_test_metrics <- lasso_predictions |>
+  metric_set(
+    accuracy,
+    roc_auc,
+    sens,
+    spec
+  )(
+    truth = high_spender,
+    estimate = .pred_class,
+    `.pred_High Spender`
+  )
+
+lasso_test_metrics |>
+  mutate(
+    .estimate = round(.estimate, 3)
+  ) |>
+  select(
+    Metric = .metric,
+    Result = .estimate
+  ) |>
+  knitr::kable(
+    caption = "Lasso Logistic Regression Test Performance"
+  )
+```
+
+## Interpretation
+
+The Lasso Logistic Regression model provides a baseline for predicting high-spending customers. Its performance will later be compared with the Decision Tree, Random Forest, and XGBoost models using the same 10-fold cross-validation folds and ROC AUC.
+
+# Model 2: Tuned Decision Tree
+
+## Model Specification
+
+Unlike the initial tree from the previous assignment, this Decision Tree will tune its hyperparameters using cross-validation. Tuning allows the model to find a better balance between capturing useful customer patterns and creating a tree that is too complex.
+
+```{r}
+#| label: tuned-tree-spec
+
+tuned_tree_spec <- decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+) |>
+  set_engine("rpart") |>
+  set_mode("classification")
+```
+
+## Workflow
+
+```{r}
+#| label: tuned-tree-workflow
+
+tuned_tree_workflow <- workflow() |>
+  add_recipe(customer_recipe) |>
+  add_model(tuned_tree_spec)
+```
+
+## Tune the Decision Tree
+
+```{r}
+#| label: tuned-tree-grid
+
+set.seed(6540)
+
+tree_grid <- grid_latin_hypercube(
+  cost_complexity(),
+  tree_depth(),
+  min_n(),
+  size = 20
+)
+
+tree_tune <- tune_grid(
+  tuned_tree_workflow,
+  resamples = customer_folds,
+  grid = tree_grid,
+  metrics = metric_set(
+    roc_auc,
+    accuracy
+  )
+)
+```
+
+## Tuning Results
+
+```{r}
+#| label: fig-tree-tuning
+#| fig-cap: "Cross-validated performance across Decision Tree hyperparameter combinations."
+
+autoplot(tree_tune)
+```
+
+## Best Hyperparameters
+
+```{r}
+#| label: best-tree-parameters
+
+best_tree <- select_best(
+  tree_tune,
+  metric = "roc_auc"
+)
+
+best_tree |>
+  knitr::kable(
+    caption = "Best Decision Tree Hyperparameters Based on ROC AUC"
+  )
+```
+
+## Final Tuned Decision Tree
+
+```{r}
+#| label: final-tree-fit
+
+final_tree_workflow <- tuned_tree_workflow |>
+  finalize_workflow(best_tree)
+
+final_tree_fit <- fit(
+  final_tree_workflow,
+  data = customer_train
+)
+```
+
+## Test-Set Evaluation
+
+```{r}
+#| label: tuned-tree-test
+
+tree_predictions <- augment(
+  final_tree_fit,
+  new_data = customer_test
+)
+
+tree_test_metrics <- tree_predictions |>
+  metric_set(
+    accuracy,
+    roc_auc,
+    sens,
+    spec
+  )(
+    truth = high_spender,
+    estimate = .pred_class,
+    `.pred_High Spender`
+  )
+
+tree_test_metrics |>
+  mutate(
+    .estimate = round(.estimate, 3)
+  ) |>
+  select(
+    Metric = .metric,
+    Result = .estimate
+  ) |>
+  knitr::kable(
+    caption = "Tuned Decision Tree Test Performance"
+  )
+```
+
+## Interpretation
+
+The tuned Decision Tree provides a more flexible alternative to Lasso Logistic Regression because it can capture nonlinear relationships and interactions between customer characteristics. I will compare its cross-validated ROC AUC with the other models before deciding which method performs best.
+
+# Model 3: Random Forest
+
+## Model Specification
+
+Random Forest combines many decision trees built from different samples of the training data. It can capture nonlinear relationships and interactions while reducing some of the overfitting that can occur with a single decision tree.
+
+```{r}
+rf_spec <- rand_forest(
+  mtry = tune(),
+  min_n = tune(),
+  trees = 100
+) |>
+  set_engine(
+    "ranger",
+    importance = "permutation",
+    num.threads = 2
+  ) |>
+  set_mode("classification")
+```
+
+## Workflow
+
+```{r}
+#| label: rf-workflow
+
+rf_workflow <- workflow() |>
+  add_recipe(customer_recipe) |>
+  add_model(rf_spec)
+```
+
+## Tune the Random Forest
+
+```{r}
+#| label: rf-tuning
+
+set.seed(6540)
+
+rf_tune_data <- customer_train |>
+  slice_sample(n = 20000)
+
+rf_folds <- vfold_cv(
+  rf_tune_data,
+  v = 5,
+  strata = high_spender
+)
+
+rf_grid <- tibble(
+  mtry = c(3L, 5L, 7L),
+  min_n = c(10L, 20L, 30L)
+)
+
+rf_tune <- tune_grid(
+  rf_workflow,
+  resamples = rf_folds,
+  grid = rf_grid,
+  metrics = metric_set(
+    roc_auc,
+    accuracy
+  )
+)
+```
+
+I am using a smaller tuning grid here because Random Forest was not loading than the previous models.
+
+## Tuning Results
+
+```{r}
+#| label: fig-rf-tuning
+#| fig-cap: "Cross-validated performance across Random Forest hyperparameter combinations."
+
+autoplot(rf_tune)
+```
+
+## Best Hyperparameters
+
+```{r}
+#| label: best-rf
+
+best_rf <- select_best(
+  rf_tune,
+  metric = "roc_auc"
+)
+
+best_rf |>
+  knitr::kable(
+    caption = "Best Random Forest Hyperparameters Based on ROC AUC"
+  )
+```
+
+## Final Random Forest
+
+```{r}
+#| label: final-rf-fit
+
+final_rf_workflow <- rf_workflow |>
+  finalize_workflow(best_rf)
+
+final_rf_fit <- fit(
+  final_rf_workflow,
+  data = customer_train
+)
+```
+
+## Test-Set Evaluation
+
+```{r}
+#| label: rf-test
+
+rf_predictions <- augment(
+  final_rf_fit,
+  new_data = customer_test
+)
+
+rf_test_metrics <- rf_predictions |>
+  metric_set(
+    accuracy,
+    roc_auc,
+    sens,
+    spec
+  )(
+    truth = high_spender,
+    estimate = .pred_class,
+    `.pred_High Spender`
+  )
+
+rf_test_metrics |>
+  mutate(
+    .estimate = round(.estimate, 3)
+  ) |>
+  select(
+    Metric = .metric,
+    Result = .estimate
+  ) |>
+  knitr::kable(
+    caption = "Random Forest Test Performance"
+  )
+```
+
+## Interpretation
+
+Random Forest combines predictions from many decision trees rather than relying on one tree. This may improve performance if customer spending depends on nonlinear relationships or interactions between several customer characteristics. I will compare its cross-validated ROC AUC with the other models before selecting the final model.
+
+# Model 4: XGBoost
+
+## Model Specification
+
+```{r}
+#| label: xgb-spec
+
+xgb_spec <- boost_tree(
+  trees = 200,
+  tree_depth = tune(),
+  learn_rate = tune(),
+  min_n = tune()
+) |>
+  set_engine(
+    "xgboost",
+    nthread = 2
+  ) |>
+  set_mode("classification")
+```
+
+## Workflow
+
+```{r}
+#| label: xgb-workflow
+
+xgb_workflow <- workflow() |>
+  add_recipe(customer_recipe) |>
+  add_model(xgb_spec)
+```
+
+## Tune XGBoost
+
+```{r}
+#| label: xgb-tuning
+
+set.seed(6540)
+
+xgb_tune_data <- customer_train |>
+  slice_sample(n = 20000)
+
+xgb_folds <- vfold_cv(
+  xgb_tune_data,
+  v = 5,
+  strata = high_spender
+)
+
+xgb_grid <- tibble(
+  tree_depth = c(3L, 5L, 7L),
+  learn_rate = c(0.03, 0.05, 0.10),
+  min_n = c(10L, 20L, 30L)
+)
+
+xgb_tune <- tune_grid(
+  xgb_workflow,
+  resamples = xgb_folds,
+  grid = xgb_grid,
+  metrics = metric_set(
+    roc_auc,
+    accuracy
+  )
+)
+```
+
+A smaller tuning sample and grid are used because XGBoost was not loading. The selected hyperparameters will later be evaluated using the same 10-fold cross-validation procedure as the other models.
+
+## Tuning Results
+
+```{r}
+#| label: fig-xgb-tuning
+#| fig-cap: "Cross-validated performance across XGBoost hyperparameter combinations."
+
+autoplot(xgb_tune)
+```
+
+## Best Hyperparameters
+
+```{r}
+#| label: best-xgb
+
+best_xgb <- select_best(
+  xgb_tune,
+  metric = "roc_auc"
+)
+
+best_xgb |>
+  knitr::kable(
+    caption = "Best XGBoost Hyperparameters Based on ROC AUC"
+  )
+```
+
+## Final XGBoost Model
+
+```{r}
+#| label: final-xgb-fit
+
+final_xgb_workflow <- xgb_workflow |>
+  finalize_workflow(best_xgb)
+
+final_xgb_fit <- fit(
+  final_xgb_workflow,
+  data = customer_train
+)
+```
+
+## Test-Set Evaluation
+
+```{r}
+#| label: xgb-test
+
+xgb_predictions <- augment(
+  final_xgb_fit,
+  new_data = customer_test
+)
+
+xgb_test_metrics <- xgb_predictions |>
+  metric_set(
+    accuracy,
+    roc_auc,
+    sens,
+    spec
+  )(
+    truth = high_spender,
+    estimate = .pred_class,
+    `.pred_High Spender`
+  )
+
+xgb_test_metrics |>
+  mutate(
+    .estimate = round(.estimate, 3)
+  ) |>
+  select(
+    Metric = .metric,
+    Result = .estimate
+  ) |>
+  knitr::kable(
+    caption = "XGBoost Test Performance"
+  )
+```
+
+## Interpretation
+
+XGBoost is the most flexible model tested so far because it builds trees sequentially and uses each new tree to improve previous predictions. Its performance will be compared with Lasso Logistic Regression, the tuned Decision Tree, and Random Forest using 10-fold cross-validation before selecting the final model.
+
+# Model Comparison Using 10-Fold Cross-Validation
+
+To make the comparison fair, I evaluated the finalized versions of all four models using the same 10 cross-validation folds. ROC AUC is used as the main comparison metric because it measures how well each model separates high spenders from non-high spenders across classification thresholds.
+
+## Cross-Validation
+
+```{r}
+#| label: final-model-cv
+
+set.seed(6540)
+
+lasso_cv <- fit_resamples(
+  final_lasso_workflow,
+  resamples = customer_folds,
+  metrics = metric_set(roc_auc)
+)
+
+tree_cv <- fit_resamples(
+  final_tree_workflow,
+  resamples = customer_folds,
+  metrics = metric_set(roc_auc)
+)
+
+rf_cv <- fit_resamples(
+  final_rf_workflow,
+  resamples = customer_folds,
+  metrics = metric_set(roc_auc)
+)
+
+xgb_cv <- fit_resamples(
+  final_xgb_workflow,
+  resamples = customer_folds,
+  metrics = metric_set(roc_auc)
+)
+```
+
+## Comparison Results
+
+```{r}
+#| label: model-comparison-table
+
+model_comparison <- bind_rows(
+  collect_metrics(lasso_cv) |>
+    mutate(Model = "Lasso Logistic Regression"),
+
+  collect_metrics(tree_cv) |>
+    mutate(Model = "Decision Tree"),
+
+  collect_metrics(rf_cv) |>
+    mutate(Model = "Random Forest"),
+
+  collect_metrics(xgb_cv) |>
+    mutate(Model = "XGBoost")
+) |>
+  filter(.metric == "roc_auc") |>
+  select(
+    Model,
+    Mean_ROC_AUC = mean,
+    Standard_Error = std_err
+  ) |>
+  arrange(desc(Mean_ROC_AUC))
+
+model_comparison |>
+  mutate(
+    Mean_ROC_AUC = round(Mean_ROC_AUC, 3),
+    Standard_Error = round(Standard_Error, 4)
+  ) |>
+  knitr::kable(
+    caption = "10-Fold Cross-Validation ROC AUC Comparison"
+  )
+```
+
+## Cross-Validation ROC AUC
+
+```{r}
+#| label: fig-model-comparison
+#| fig-cap: "Mean 10-fold cross-validated ROC AUC for the four classification models."
+
+ggplot(
+  model_comparison,
+  aes(
+    x = reorder(Model, Mean_ROC_AUC),
+    y = Mean_ROC_AUC
+  )
+) +
+  geom_col() +
+  geom_errorbar(
+    aes(
+      ymin = Mean_ROC_AUC - Standard_Error,
+      ymax = Mean_ROC_AUC + Standard_Error
+    ),
+    width = 0.20
+  ) +
+  coord_flip() +
+  labs(
+    title = "10-Fold Cross-Validation Model Comparison",
+    x = NULL,
+    y = "Mean ROC AUC"
+  ) +
+  theme_minimal()
+```
+
+## Model Comparison Interpretation
+
+The 10-fold cross-validation results showed that XGBoost achieved the highest mean ROC AUC at 0.622, followed closely by Lasso Logistic Regression at 0.620. However, the difference between the two models was only 0.002, which is smaller than XGBoost's standard error of 0.0027. Therefore, XGBoost did not outperform Lasso by more than one standard error. The Decision Tree and Random Forest performed slightly worse, with ROC AUC values of 0.613 and 0.609.
+
+## Tree-Based Models vs. Logistic Regression
+
+I expected the tree-based models to perform better because they can capture nonlinear relationships and interactions between customer characteristics. However, the cross-validation results did not strongly support this expectation. XGBoost performed slightly better than Lasso Logistic Regression, but the Decision Tree and Random Forest both performed worse.
+
+## Final Model Selection
+
+The similar performance of XGBoost and Lasso suggests that the relationships in this dataset may not require a highly complex model to make useful predictions. However, XGBoost achieved the highest cross-validated ROC AUC and also had the highest test-set ROC AUC, so I would select XGBoost as the final model. Its advantage over Lasso is small, so I would not consider it dramatically better, but it provides the strongest overall predictive performance among the four models tested.
+
+# XGBoost Model Interpretation
+
+Because XGBoost achieved the highest mean ROC AUC in the 10-fold cross-validation comparison, I selected it as the final model for interpretation.
+
+## Variable Importance
+
+```{r}
+#| label: fig-xgb-importance
+#| fig-cap: "Feature importance for the final XGBoost model."
+#| fig-width: 9
+#| fig-height: 6
+
+xgb_engine <- final_xgb_fit |>
+  extract_fit_engine()
+
+xgb_importance <- xgboost::xgb.importance(
+  model = xgb_engine
+)
+
+xgb_importance |>
+  slice_head(n = 10) |>
+  ggplot(
+    aes(
+      x = reorder(Feature, Gain),
+      y = Gain
+    )
+  ) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "XGBoost Feature Importance",
+    x = NULL,
+    y = "Gain"
+  ) +
+  theme_minimal()
+```
+
+> The variable-importance results show that prior total spending was by far the most influential feature in the XGBoost model. Online purchase share and age also contributed to the predictions, but their importance was much smaller. Fashion News subscription status and club membership had very little influence compared with previous purchasing behavior. This suggests that a customer's past spending behavior provides much more information about whether they will become a future high spender than demographic or membership characteristics alone.
+
+## Partial Dependence Plot
+
+```{r}
+#| label: fig-xgb-pdp
+#| fig-cap: "Partial dependence of predicted high-spender probability on prior total spending."
+#| fig-width: 9
+#| fig-height: 6
+
+set.seed(6540)
+
+pdp_sample <- customer_train |>
+  slice_sample(n = 3000)
+
+spend_grid <- quantile(
+  customer_train$prior_total_spend,
+  probs = seq(0.05, 0.95, length.out = 20),
+  na.rm = TRUE
+)
+
+pdp_results <- purrr::map_dfr(
+  spend_grid,
+  function(spend_value) {
+
+    new_data <- pdp_sample |>
+      mutate(
+        prior_total_spend = spend_value
+      )
+
+    predictions <- predict(
+      final_xgb_fit,
+      new_data = new_data,
+      type = "prob"
+    )
+
+    tibble(
+      prior_total_spend = spend_value,
+      predicted_probability = mean(
+        predictions$`.pred_High Spender`
+      )
+    )
+  }
+)
+
+ggplot(
+  pdp_results,
+  aes(
+    x = prior_total_spend,
+    y = predicted_probability
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(
+    title = "Partial Dependence of Prior Total Spending",
+    x = "Prior Total Spending",
+    y = "Predicted Probability of High Spender"
+  ) +
+  theme_minimal()
+```
+
+> The partial dependence plot shows that customers with higher prior total spending generally have a higher predicted probability of becoming future high spenders. The relationship is not perfectly linear, but the overall pattern increases as previous spending increases. This supports the variable-importance results and suggests that a customer's previous spending is an important indicator of future purchasing behavior.
+
+## SHAP Analysis
+
+```{r}
+#| label: fig-xgb-shap
+#| fig-cap: "Mean absolute SHAP values for the final XGBoost model."
+#| fig-width: 9
+#| fig-height: 6
+
+# Prepare the recipe using the training data
+xgb_recipe_prep <- prep(
+  customer_recipe,
+  training = customer_train
+)
+
+# Create the processed predictor matrix
+xgb_baked <- bake(
+  xgb_recipe_prep,
+  new_data = customer_test
+) |>
+  select(-high_spender, -customer_id)
+
+xgb_matrix <- as.matrix(xgb_baked)
+
+# Use a sample to keep SHAP computation fast
+set.seed(6540)
+
+shap_index <- sample(
+  seq_len(nrow(xgb_matrix)),
+  size = min(3000, nrow(xgb_matrix))
+)
+
+shap_matrix <- predict(
+  xgb_engine,
+  xgb_matrix[shap_index, , drop = FALSE],
+  predcontrib = TRUE
+)
+
+# Remove the BIAS column
+shap_values <- shap_matrix[
+  ,
+  colnames(shap_matrix) != "BIAS",
+  drop = FALSE
+]
+
+shap_importance <- tibble(
+  Feature = colnames(shap_values),
+  Mean_Absolute_SHAP = colMeans(abs(shap_values))
+) |>
+  filter(
+    Feature != "(Intercept)"
+  ) |>
+  arrange(
+    desc(Mean_Absolute_SHAP)
+  ) |>
+  slice_head(n = 10)
+
+
+ggplot(
+  shap_importance,
+  aes(
+    x = reorder(Feature, Mean_Absolute_SHAP),
+    y = Mean_Absolute_SHAP
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "XGBoost SHAP Feature Impact",
+    x = NULL,
+    y = "Mean Absolute SHAP Value"
+  ) +
+  theme_minimal()
+```
+
+> The SHAP results show that unknown Fashion News subscription status and prior total spending had the largest effects on individual customer predictions. Prior total spending was also the most important feature in the variable-importance chart, confirming that previous purchasing behavior plays an important role in predicting future high spenders. The strong SHAP value for unknown Fashion News status suggests that missing or unknown subscription information also affected individual predictions, although this result should be interpreted carefully because "Unknown" represents missing or unclear customer information rather than a specific subscription choice.
+
+# Client Recommendations
+
+The results suggest that H&M should focus primarily on customers' previous purchasing behavior when identifying customers who may become future high spenders. Prior total spending was the strongest feature in the variable-importance analysis, and the partial dependence plot showed that predicted high-spender probability generally increased as previous spending increased.
+
+I would recommend using prior spending behavior to help identify customers for more personalized promotions and product recommendations. H&M should also improve the completeness of Fashion News subscription information because unknown subscription status had a large effect on individual predictions in the SHAP analysis. Better customer data could make future predictions more reliable.
+
+::: callout-note
+## Main Recommendation
+
+Previous purchasing behavior appears to be more useful for predicting future high spenders than demographic characteristics alone. H&M could use this information to focus marketing efforts on customers who already show stronger purchasing activity while continuing to improve the quality of customer subscription data.
+:::
 
 # Appendix
 
-## GitHub Repository
+GitHub Pages
 
-<https://github.com/gigibrunel/W10-0---Preview-Ensemble-Topics-Before-Class.git>
+GitHub Repo
 
-## GitHub Pages
-
-<https://gigibrunel.github.io/W10-0---Preview-Ensemble-Topics-Before-Class/>
+<https://github.com/gigibrunel/M10---Applying-to-your-AO-Bagging-Boosting>
